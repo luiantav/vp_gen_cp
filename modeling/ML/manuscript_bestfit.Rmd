@@ -1,0 +1,364 @@
+---
+title: "Model checks: get best fitting model + save info + model parameters in better format
+author: "Lu"
+date: "2024-01-10"
+output: html_document
+---
+
+#install/load packages
+```{r}
+packages <- c("ggplot2", "dplyr", "stats","lme4", "here", "renv", "datawizard","gtools", "see","plotrix","modelbased","emmeans", "performance", "wesanderson", "tidyverse", "ggsignif","broom","quickpsy", "ggpubr", "performance","glmmTMB", "loo", "bayesplot","lattice", "parameters","rlang")
+
+invisible(lapply(packages,
+  FUN = function(x) {
+    if (!require(x, character.only = T)) {
+      install.packages(x, dependencies = T)
+      library(x, character.only = T)
+    }
+  }
+))
+
+#renv::init()
+
+#helper function
+index_of_min <- function(x) {
+  return(which.min(x))
+}
+```
+
+
+#paths & get data 
+```{r}
+here::i_am("flag_project_root.R")
+outs = here::here('outputs','fitting', 'todata')
+
+#get fitted parameters
+all_files <- list.files(path = outs, pattern = "\\.csv$", full.names = TRUE)
+csv_files <- all_files[grep(".csv", all_files, ignore.case = TRUE) & grepl("fits_", all_files, ignore.case = TRUE)]
+data_list <- lapply(csv_files, read.csv)
+df <- bind_rows(data_list)
+
+#data_path = here::here()
+source(here::here('modeling', 'ML', "extract_parameters_fromdf.R"))
+```
+
+#check bestfitting model 
+```{r}
+df_min_bic <- df %>%
+  group_by(model, sub, ou, pu) %>%
+  slice_min(order_by = BIC, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+df_min_bic <- df_min_bic %>%
+  filter(model %in% c("perc_offset", "value_alt_offset"))
+
+
+df_sum_bic <- df_min_bic %>%
+  group_by(sub, model) %>%
+  summarise(total_BIC = sum(BIC, na.rm = TRUE), .groups = "drop")
+
+df_sum_overall <- df_sum_bic %>%
+  group_by(model) %>%
+  summarise(mean_BIC = sum(total_BIC, na.rm = TRUE), .groups = "drop")
+
+df_sum_overall$demean = df_sum_overall$mean_BIC - mean(df_sum_overall$mean_BIC)
+df_sum_overall
+
+ggplot(df_sum_overall, aes(x=model,y=demean, fill = model, color = model))+geom_bar(stat = "identity")+theme_classic()+theme(aspect.ratio = 3)+theme(text = element_text(size = 20))+ scale_x_discrete(labels=c('P', 'V'))+ scale_fill_manual( values = c("orange","black","darkblue"))+ scale_color_manual( values = c("orange","black", "darkblue"))+ylab("BIC (demeaned)")
+
+```
+
+
+```{r}
+#Check bestfit x condition
+df_wide <- df_min_bic %>%
+  select(sub, pu, ou, model, BIC) %>%
+  pivot_wider(
+    names_from = model,
+    values_from = BIC
+  )
+
+model_cols <- setdiff(names(df_wide), c("sub", "pu", "ou"))
+
+df_wide <- df_wide %>%
+  rowwise() %>%
+  mutate(bestfit = model_cols[which.min(c_across(all_of(model_cols)))]) %>%
+  ungroup()
+
+df_wide$rr <- df_wide$ou
+#write.csv(df_wide, here::here('outputs', 'fitting', 'todata', paste0("bestfit_model.csv")))
+
+
+bestfit_counts <- df_wide %>%
+  count(bestfit, name = "n_occurrences")
+bestfit_counts
+
+bestfit_counts <- df_wide %>%
+  count(bestfit, name = "n_occurrences") %>%
+  mutate(percent = 100 * n_occurrences / sum(n_occurrences))
+bestfit_counts
+
+
+bff_twoway <- df_wide %>%
+  filter(bestfit == "perc_offset") %>%
+  select(sub, pu, ou) %>%
+  distinct()
+bff_twoway
+```
+
+```{r}
+#subset parameters 
+df_min_bic <- df %>%
+  group_by(model, sub, ou, pu) %>%
+  slice_min(order_by = BIC, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+df_min_bic <- df_min_bic %>%
+  left_join(df_wide %>% select(sub, ou, pu, bestfit),
+            by = c("sub", "ou", "pu"))
+
+#value
+df_sel <- df_min_bic %>%
+  filter(model %in% c("value_alt_offset"))
+df_sel$rr <- df_sel$ou
+df_save <- df_sel[, c("sub","model","rr","pu","omega","lambda","offset","bestfit")]
+#write.csv(df_save, here::here('outputs', 'fitting', 'todata', paste0("fittedparameters_valuemodel.csv")))
+
+#perc
+df_sel <- df_min_bic %>%
+  filter(model %in% c("perc_offset"))
+df_sel$rr <- df_sel$ou
+df_save <- df_sel[, c("sub","model","rr","pu","rho","bestfit")]
+#write.csv(df_save, here::here('outputs', 'fitting', 'todata', paste0("fittedparameters_perceptualmodel.csv")))
+
+#full
+df_sel <- df_min_bic %>%
+  filter(model %in% c("full_offset"))
+df_sel$rr <- df_sel$ou
+df_save <- df_sel[, c("sub","model","rr","pu","rho","omega","lambda","offset","bestfit")]
+#write.csv(df_save, here::here('outputs', 'fitting', 'todata', paste0("fittedparameters_fullmodel.csv")))
+```
+
+
+
+#Comparison with Hybrid
+```{r}
+df_min_bic <- df %>%
+  group_by(model, sub, ou, pu) %>%
+  slice_min(order_by = BIC, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+df_min_bic <- df_min_bic %>%
+  filter(model %in% c("perc_offset", "value_alt_offset", "full_offset"))
+
+
+df_sum_bic <- df_min_bic %>%
+  group_by(sub, model) %>%
+  summarise(total_BIC = sum(BIC, na.rm = TRUE), .groups = "drop")
+
+df_sum_overall <- df_sum_bic %>%
+  group_by(model) %>%
+  summarise(mean_BIC = sum(total_BIC, na.rm = TRUE), .groups = "drop")
+
+
+df_sum_overall$demean = df_sum_overall$mean_BIC - mean(df_sum_overall$mean_BIC)
+df_sum_overall$model <- factor(df_sum_overall$model,
+                               levels = c("perc_offset", "value_alt_offset", "full_offset"))
+
+ggplot(df_sum_overall, aes(x = model, y = demean, fill = model, color = model)) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  theme(aspect.ratio = 2,
+        text = element_text(size = 20)) +
+  scale_fill_manual(values = c("orange","black", "darkblue")) +
+  scale_color_manual(values = c("orange","black", "darkblue")) +
+  ylab("BIC (demeaned)") +
+  scale_x_discrete(labels = c("P", "V", "Hybrid"))
+```
+
+```{r}
+df_wide <- df_min_bic %>%
+  select(sub, pu, ou, model, BIC) %>%
+  pivot_wider(
+    names_from = model,
+    values_from = BIC
+  )
+
+model_cols <- setdiff(names(df_wide), c("sub", "pu", "ou"))
+
+df_wide <- df_wide %>%
+  rowwise() %>%
+  mutate(bestfit = model_cols[which.min(c_across(all_of(model_cols)))]) %>%
+  ungroup()
+
+df_wide$rr <- df_wide$ou
+#write.csv(df_wide, here::here('outputs', 'fitting', 'todata', paste0("bestfitHybrid_model.csv")))
+
+
+bestfit_counts <- df_wide %>%
+  count(bestfit, name = "n_occurrences")
+bestfit_counts
+
+bestfit_counts <- df_wide %>%
+  count(bestfit, name = "n_occurrences") %>%
+  mutate(percent = 100 * n_occurrences / sum(n_occurrences))
+bestfit_counts
+
+bestfit_counts$bestfit <- factor(bestfit_counts$bestfit,
+                               levels = c("perc_offset", "value_alt_offset", "full_offset"))
+
+ggplot(bestfit_counts, aes(x = bestfit, y = percent, fill = bestfit, color = bestfit)) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  theme(aspect.ratio = 2,
+        text = element_text(size = 20)) +
+  scale_fill_manual(values = c("orange","black", "darkblue")) +
+  scale_color_manual(values = c("orange","black", "darkblue")) +
+  xlab("Best fitting model") + 
+  ylab("") +
+  scale_x_discrete(labels = c("P", "V", "Hybrid"))
+
+
+bff <- df_wide %>%
+  filter(bestfit == "perc_offset") %>%
+  select(sub, pu, ou) %>%
+  distinct()
+bff
+
+#perc before 128 ~ 15.23
+#perc after 126 ~ 15
+#overlap before and after = 126/128 = 0.9844
+#no overlap = 1 - 0.9844 = 0.0156
+overlap <- dplyr::inner_join(bff_twoway, bff, by = c("sub", "pu", "ou")) #both in perceptual before and after
+only_in_df1 <- dplyr::anti_join(bff_twoway, bff, by = c("sub", "pu", "ou")) #perceptual before but not after
+only_in_df2 <- dplyr::anti_join(bff, bff_twoway, by = c("sub", "pu", "ou")) #only perceptual after
+
+overlap
+only_in_df1 #only 2 are better explained by sigmoid compared to perceptual model. 
+only_in_df2
+```
+
+```{r}
+#subset parameters 
+df_min_bic <- df %>%
+  group_by(model, sub, ou, pu) %>%
+  slice_min(order_by = BIC, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+df_min_bic <- df_min_bic %>%
+  left_join(df_wide %>% select(sub, ou, pu, bestfit),
+            by = c("sub", "ou", "pu"))
+
+#full
+df_sel <- df_min_bic %>%
+  filter(model %in% c("full_offset"))
+df_sel$rr <- df_sel$ou
+df_save <- df_sel[, c("sub","model","rr","pu","rho","omega","lambda","offset","bestfit")]
+#write.csv(df_save, here::here('outputs', 'fitting', 'todata', paste0("fittedparameters_fullmodelHybrid.csv")))
+
+
+#get omega_cat
+mean(df_sel[df_sel$omega >=0.5,]$rho)
+mean(df_sel$rho)
+
+#get who by best model fit
+df_mean_rho <- df_sel %>%
+  group_by(bestfit, pu) %>%
+  summarise(mean_rho = mean(rho, na.rm = TRUE),
+            sd_rho   = sd(rho, na.rm = TRUE),
+            n        = n())
+
+df_ab <- df_sel %>% filter(bestfit %in% c("value_alt_offset", "full_offset"))
+
+# Independent samples t-test
+t_test_result <- t.test(rho ~ bestfit, data = df_ab)
+
+print(t_test_result)
+
+```
+
+
+#SIGMOID
+```{r}
+df_min_bic <- df %>%
+  group_by(model, sub, ou, pu) %>%
+  slice_min(order_by = BIC, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+df_min_bic <- df_min_bic %>%
+  filter(model %in% c("value_sig", "value_alt_offset","perc_offset"))
+
+df_sum_bic <- df_min_bic %>%
+  group_by(sub, model) %>%
+  summarise(total_BIC = sum(BIC, na.rm = TRUE), .groups = "drop")
+
+df_sum_overall <- df_sum_bic %>%
+  group_by(model) %>%
+  summarise(mean_BIC = sum(total_BIC, na.rm = TRUE), .groups = "drop")
+
+
+df_sum_overall$demean = df_sum_overall$mean_BIC - mean(df_sum_overall$mean_BIC)
+df_sum_overall
+
+ggplot(df_sum_overall, aes(x=model,y=demean, fill = model, color = model))+geom_bar(stat = "identity")+theme_classic()+theme(aspect.ratio = 3)+theme(text = element_text(size = 20))+ scale_x_discrete(labels=c('P','V', 'Vsig'))+ scale_fill_manual( values = c("orange","black","darkblue"))+ scale_color_manual( values = c("orange","black", "darkblue"))+ylab("BIC (demeaned)")
+
+
+#x condition 
+df_wide <- df_min_bic %>%
+  select(sub, pu, ou, model, BIC) %>%
+  pivot_wider(
+    names_from = model,
+    values_from = BIC
+  )
+
+model_cols <- setdiff(names(df_wide), c("sub", "pu", "ou"))
+
+df_wide <- df_wide %>%
+  rowwise() %>%
+  mutate(bestfit = model_cols[which.min(c_across(all_of(model_cols)))]) %>%
+  ungroup()
+
+df_wide$rr <- df_wide$ou
+#write.csv(df_wide, here::here('outputs', 'fitting', 'todata', paste0("bestfit_model.csv")))
+df_wide <- df_wide[!is.na(df_wide$value_sig), ]
+
+
+bestfit_counts <- df_wide %>%
+  count(bestfit, name = "n_occurrences")
+bestfit_counts
+
+bestfit_counts <- df_wide %>%
+  count(bestfit, name = "n_occurrences") %>%
+  mutate(percent = 100 * n_occurrences / sum(n_occurrences))
+bestfit_counts
+
+ggplot(bestfit_counts, aes(x=bestfit,y=percent, fill = bestfit, color = bestfit))+geom_bar(stat = "identity")+theme_classic()+theme(aspect.ratio = 2)+theme(text = element_text(size = 20))+ scale_fill_manual( values = c("orange","black","darkblue"))+ scale_color_manual( values = c("orange","black","darkblue"))+ylab("%")+ scale_x_discrete(labels=c('P','V', 'Vsig'))+xlab("best fit")
+
+
+#check where sigmoid ones were taken from? 
+bff <- df_wide %>%
+  filter(bestfit == "perc_offset") %>%
+  select(sub, pu, ou) %>%
+  distinct()
+bff
+
+#perc before 128 ~ 15.23
+#perc after 125 ~ 14.88
+#overlap before and after = 125/128 = 97.66
+#no overlap = 1 - 0.9765625 = 0.023 %
+overlap <- dplyr::inner_join(bff_twoway, bff, by = c("sub", "pu", "ou")) #both in perceptual before and after
+only_in_df1 <- dplyr::anti_join(bff_twoway, bff, by = c("sub", "pu", "ou")) #perceptual before but not after
+only_in_df2 <- dplyr::anti_join(bff, bff_twoway, by = c("sub", "pu", "ou")) #only perceptual after
+
+overlap
+only_in_df1 #only 3 are better explained by sigmoid compared to perceptual model. 
+only_in_df2
+```
+
+
+
+
+
+
+
+

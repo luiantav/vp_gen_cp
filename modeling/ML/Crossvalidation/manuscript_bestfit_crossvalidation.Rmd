@@ -1,0 +1,495 @@
+---
+title: "Model checks: get best fitting model + save info + model parameters in better format
+author: "Lu"
+date: "2024-01-10"
+output: html_document
+---
+
+#install/load packages
+```{r}
+packages <- c("ggplot2", "dplyr", "stats","lme4", "here", "renv", "datawizard","gtools", "see","plotrix","modelbased","emmeans", "performance", "wesanderson", "tidyverse", "ggsignif","broom","quickpsy", "ggpubr", "performance","glmmTMB", "loo", "bayesplot","lattice", "parameters","rlang")
+
+invisible(lapply(packages,
+  FUN = function(x) {
+    if (!require(x, character.only = T)) {
+      install.packages(x, dependencies = T)
+      library(x, character.only = T)
+    }
+  }
+))
+
+#renv::init()
+
+#helper function
+index_of_min <- function(x) {
+  return(which.min(x))
+}
+```
+
+
+#paths & get data 
+```{r}
+here::i_am("flag_project_root.R")
+outs = here::here('outputs','fitting', 'crossvalidation') 
+#outs = here::here('outputs','fitting', 'crossvalidationFULL') 
+
+#get fitted parameters
+all_files <- list.files(path = outs, pattern = "\\.csv$", full.names = TRUE)
+csv_files <- all_files[grep(".csv", all_files, ignore.case = TRUE) & grepl("cvfits", all_files, ignore.case = TRUE)]
+data_list <- lapply(csv_files, read.csv)
+df <- do.call(rbind, data_list)
+
+data_path = here::here()
+source(here::here('modeling', 'ML', 'Crossvalidation', "extract_parameters_fromdf_crossvalidation.R"))
+```
+
+
+
+######## Get model parameters ########
+
+# VALUE vs PERC
+```{r}
+# Init. variables 
+rho_perc_est <- rho_full <- lambda_full <- omega_full <- offset_full <- lambda_value_alt_offset <- omega_value_alt_offset<- offset_value_alt_offset <- vsd_ns2 <- basesd_ns2 <- NA
+
+# Get parameters for best iteration x model 
+haa = get_parameters2(df) #wrangling 
+
+# Drop unnecessary repetitions 
+dfs = haa[(haa$iter == 1 & haa$fold ==1),]
+```
+
+
+# PERC MODEL: RHO
+```{r}
+
+full <- dfs %>%
+  select(contains(c("RHO_perc","sub"), ignore.case = FALSE))
+
+wrang = full %>% 
+  tidyr::pivot_longer(
+    cols = starts_with(c("rho")), 
+    names_to = "rho", 
+    values_drop_na = TRUE
+  )
+
+wrang$rho[wrang$rho == "RHO_perc1"] <- "R1P1"
+wrang$rho[wrang$rho == "RHO_perc2"] <- "R2P1"
+wrang$rho[wrang$rho == "RHO_perc3"] <- "R3P1"
+wrang$rho[wrang$rho == "RHO_perc4"] <- "R1P2"
+wrang$rho[wrang$rho == "RHO_perc5"] <- "R2P2"
+wrang$rho[wrang$rho == "RHO_perc6"] <- "R3P2"
+
+
+wrang$pu = NA
+wrang$rr = NA
+wrang$pu[grepl("P1", wrang$rho)] <- "low"
+wrang$pu[grepl("P2", wrang$rho)] <- "high"
+
+wrang$rr[grepl("R1", wrang$rho)] <- "25"
+wrang$rr[grepl("R2", wrang$rho)] <- "50"
+wrang$rr[grepl("R3", wrang$rho)] <- "75"
+
+wrang_perc = wrang
+#pw = wrang
+
+#save perc parameters
+colnames(wrang_perc)[colnames(wrang_perc) == "rho"] <- "RH"
+colnames(wrang_perc)[colnames(wrang_perc) == "value"] <- "rho"
+wrang_perc$model = 'perc'
+ndf <- wrang_perc[, c("sub", "rr", "pu", "rho", "model")]
+
+ggplot(ndf, aes(x = rho))+geom_histogram(bins = 10)+facet_grid(rr~pu)
+#write.csv(ndf, here::here('outputs', 'fitting', paste0("fittedparameters_perceptualmodel.csv")))
+```
+
+
+
+# VALUE Model parameters
+```{r}
+full <- dfs %>%
+  select(contains(c("omega_value_alt_offset","sub")))
+
+wrang = full %>% 
+  tidyr::pivot_longer(
+    cols = starts_with(c("omega")), 
+    names_to = "omega", 
+    values_drop_na = TRUE
+  )
+
+wrang$pu = NA
+wrang$rr = NA
+wrang$pu[grepl("P1", wrang$omega)] <- "low"
+wrang$pu[grepl("P2", wrang$omega)] <- "high"
+
+wrang$rr[grepl("R1", wrang$omega)] <- "25"
+wrang$rr[grepl("R2", wrang$omega)] <- "50"
+wrang$rr[grepl("R3", wrang$omega)] <- "75"
+wrang$model_rule = ifelse(wrang$value < 0.5, "linear", "gaussian")
+
+value_alt_omega = wrang #for saving
+
+ggplot(value_alt_omega, aes(x = value))+geom_histogram(bins = 10)+facet_grid(rr~pu)
+```
+
+#Lambda
+```{r}
+full <- dfs %>%
+  select(contains(c("lambda_value_alt_offset","sub",'rulereverted')))
+
+wrang = full %>% 
+  tidyr::pivot_longer(
+    cols = starts_with(c("lambda")), 
+    names_to = "lambda", 
+    values_drop_na = TRUE
+  )
+
+wrang$pu = NA
+wrang$rr = NA
+wrang$pu[grepl("P1", wrang$lambda)] <- "low"
+wrang$pu[grepl("P2", wrang$lambda)] <- "high"
+
+wrang$rr[grepl("R1", wrang$lambda)] <- "25"
+wrang$rr[grepl("R2", wrang$lambda)] <- "50"
+wrang$rr[grepl("R3", wrang$lambda)] <- "75"
+
+value_alt_lambda = wrang
+
+ggplot(value_alt_lambda, aes(x = value))+geom_histogram(bins = 10)+facet_grid(rr~.)
+```
+
+#OFFSET
+```{r, out.width="25%"}
+full <- dfs %>%
+  select(contains(c("offset_value_alt_offset","sub","rulereverted","rule_value_alt_off")))
+
+wrang = full %>% 
+  tidyr::pivot_longer(
+    cols = starts_with(c("offset")), 
+    names_to = "offset", 
+    values_drop_na = TRUE
+  )
+
+wrang$pu = NA
+wrang$rr = NA
+wrang$pu[grepl("P1", wrang$offset)] <- "low"
+wrang$pu[grepl("P2", wrang$offset)] <- "high"
+
+wrang$rr[grepl("R1", wrang$offset)] <- "25"
+wrang$rr[grepl("R2", wrang$offset)] <- "50"
+wrang$rr[grepl("R3", wrang$offset)] <- "75"
+
+value_alt_offset = wrang
+
+ggplot(value_alt_offset, aes(x = value))+geom_histogram(bins = 10)+facet_grid(rr~.)
+```
+
+# Join value parameters and save to csv
+```{r}
+colnames(value_alt_omega)[colnames(value_alt_omega) == "omega"] <- "OM"
+colnames(value_alt_omega)[colnames(value_alt_omega) == "value"] <- "omega"
+colnames(value_alt_lambda)[colnames(value_alt_lambda) == "lambda"] <- "LMD"
+colnames(value_alt_lambda)[colnames(value_alt_lambda) == "value"] <- "lambda"
+colnames(value_alt_offset)[colnames(value_alt_offset) == "offset"] <- "OFF"
+colnames(value_alt_offset)[colnames(value_alt_offset) == "value"] <- "offset"
+
+mdf <- merge(value_alt_omega, value_alt_lambda, by = c("sub","rr","pu"), all = TRUE) # Change 'all = TRUE' to do a full outer join, or 'all.x = TRUE' for a left outer join
+
+mdf <- merge(mdf, value_alt_offset, by = c("sub","rr","pu"), all = TRUE) # Change 'all = TRUE' to do a full outer join, or 'all.x = TRUE' for a left outer join
+mdf$model = 'value_alt'
+ndf <- mdf[, c("sub", "rr", "pu", "lambda", "omega","offset","model")] # Specify the column names you want to keep
+
+write.csv(ndf, here::here('outputs', 'fitting', 'crossvalidation', paste0("cv_fittedparameters_valuemodel.csv")))
+#write.csv(ndf, here::here('outputs', 'fitting', 'crossvalidationFULL', 'VALUEPERC', paste0("cv_fittedparameters_valuemodel.csv")))
+```
+
+
+
+######## Model comparison: overall ########
+
+
+#get best model overall
+```{r}
+df <- do.call(rbind, data_list)
+
+#select models of interest: PERC and VALUE model with offset 
+all_combi = c("rmse_perc_estR","rmse_value_alt_offsetR")
+#all_combi = c("rmse_perc_estR","rmse_fullR")
+
+
+# get best iteration & mean cross 
+fold_results <- list()
+
+for (s in unique(df$sub)) {
+  for (ic in all_combi) {
+    fold_min_bics <- list()
+    
+    for (f in unique(df$fold[df$sub == s])) {
+      # Subset by subject and fold
+      dftemp <- subset(df, sub == s & fold == f)
+      
+      # Get BIC columns for this model
+      df2 <- dftemp[, grepl(ic, names(dftemp))]
+      
+      # Check if df2 has valid values
+      if (all(is.na(df2))) next
+      
+      # Minimum BIC across iterations (per column)
+      min_bic_per_col <- apply(df2, 2, min, na.rm = TRUE)
+      
+      # Store for this fold
+      fold_min_bics[[as.character(f)]] <- min_bic_per_col
+    }
+    
+    # Combine fold-wise minimums into a data frame
+    fold_df <- do.call(rbind, fold_min_bics)
+    
+    # Mean across folds
+    mean_across_folds <- colMeans(fold_df, na.rm = TRUE)
+    
+    #drop to make work 
+    mean_across_folds <- mean_across_folds[!grepl("^full", names(mean_across_folds))]
+
+    # Sum to get total BIC for this subject and model
+    total_fit <- sum(mean_across_folds, na.rm = TRUE)
+    
+    # Assign to df (same value across all rows for this subject & model)
+    df[[paste0("full_", ic)]][df$sub == s] <- total_fit
+  }
+}
+
+
+
+dfm = df[(df$iter == 1 & df$fold == 1), ]
+
+
+#get min BIC and index corresponding model name 
+dfm$best_fitting = apply(dfm[c("full_rmse_perc_estR","full_rmse_value_alt_offsetR")], 1, min)
+
+dfm$max_col = colnames(dfm[c("full_rmse_perc_estR","full_rmse_value_alt_offsetR")])[apply(dfm[c("full_rmse_perc_estR","full_rmse_value_alt_offsetR")], 1, which.min)]
+
+#Considering across block, 8% were best fitted by perceptual 
+table(dfm$max_col) #0.08571429 --> 27% for perc. 
+
+full_add <- apply(dfm[c("full_rmse_perc_estR","full_rmse_value_alt_offsetR")], 2, sum)
+full_add
+
+#plot in decreasing order
+t = as.data.frame(t(as.data.frame(t(full_add))))
+colnames(t) <- c("rmse")
+t = rownames_to_column(t, var = "Model")
+t$Model <- reorder(t$Model, -t$rmse)
+t$subst_mean = t$rmse - mean(t$rmse)
+t
+
+#Mean-centered rmse difference 
+toverall <- t %>%
+  group_by(Model) %>%
+  summarise_at("rmse", funs(mean),na.rm = TRUE)
+toverall$subst_mean = toverall$rmse - mean(toverall$rmse)
+
+ggplot(toverall, aes(x=Model,y=subst_mean, fill = Model, color = Model))+geom_bar(stat = "identity")+theme_classic()+theme(aspect.ratio = 3)+theme(text = element_text(size = 20))+ scale_x_discrete(labels=c('P', 'V'))+ scale_fill_manual( values = c("grey","black"))+ scale_color_manual( values = c("grey","black"))+ylab("rmse (demeaned)")+theme(legend.position = "none")
+
+#ggsave(path = paste0(data_path, "/Plots/Supplement"), width = 5, height = 5, filename = 'cv_rmse.png', device='png', dpi=700)
+```
+
+
+
+######## Model comparison: x condition ########
+
+
+```{r}
+df <- do.call(rbind, data_list)
+all_combi = c("rmse_perc_estR1P1","rmse_perc_estR1P2","rmse_perc_estR2P1","rmse_perc_estR2P2","rmse_perc_estR3P1","rmse_perc_estR3P2",
+              "rmse_value_alt_offsetR1P1","rmse_value_alt_offsetR1P2","rmse_value_alt_offsetR2P1","rmse_value_alt_offsetR2P2","rmse_value_alt_offsetR3P1","rmse_value_alt_offsetR3P2")
+
+#all_combi = c("rmse_perc_estR1P1","rmse_perc_estR1P2","rmse_perc_estR2P1","rmse_perc_estR2P2","rmse_perc_estR3P1","rmse_perc_estR3P2",
+#              "rmse_fullR1P1","rmse_fullR1P2","rmse_fullR2P1","rmse_fullR2P2","rmse_fullR3P1","rmse_fullR3P2")
+
+for (s in unique(df$sub)) {
+  for (ic in all_combi) {
+    fold_min_values <- c()
+    
+    for (f in unique(df$fold[df$sub == s])) {
+      # Subset by subject and fold
+      dftemp <- subset(df, sub == s & fold == f)
+      
+      # Get the vector of values across iterations for this subject/fold
+      values <- dftemp[[ic]]
+      
+      # Get the minimum across iterations
+      min_val <- min(values, na.rm = TRUE)
+      
+      # Store per fold
+      fold_min_values <- c(fold_min_values, min_val)
+    }
+    
+    # Mean across folds
+    mean_val <- mean(fold_min_values, na.rm = TRUE)
+    
+    # Assign result to a new column
+    df[[paste0("full_", ic)]][df$sub == s] <- mean_val
+  }
+}
+
+
+dfs = df[(df$iter == 1 & df$fold == 1), ]
+
+#find best fitting for each condition
+dfs$best_fittingR1P1 = apply(dfs[c("full_rmse_perc_estR1P1","full_rmse_value_alt_offsetR1P1")], 1, min)
+dfs$best_fittingR1P2 = apply(dfs[c("full_rmse_perc_estR1P2","full_rmse_value_alt_offsetR1P2")], 1, min)
+dfs$best_fittingR2P1 = apply(dfs[c("full_rmse_perc_estR2P1","full_rmse_value_alt_offsetR2P1")], 1, min)
+dfs$best_fittingR2P2 = apply(dfs[c("full_rmse_perc_estR2P2","full_rmse_value_alt_offsetR2P2")], 1, min)
+dfs$best_fittingR3P1 = apply(dfs[c("full_rmse_perc_estR3P1","full_rmse_value_alt_offsetR3P1")], 1, min)
+dfs$best_fittingR3P2 = apply(dfs[c("full_rmse_perc_estR3P2","full_rmse_value_alt_offsetR3P2")], 1, min)
+
+#find corresponding model name
+dfs$max_colR1P1 = colnames(dfs[c("full_rmse_perc_estR1P1","full_rmse_value_alt_offsetR1P1")])[apply(dfs[c("full_rmse_perc_estR1P1","full_rmse_value_alt_offsetR1P1")], 1, which.min)]
+dfs$max_colR1P2 = colnames(dfs[c("full_rmse_perc_estR1P2","full_rmse_value_alt_offsetR1P2")])[apply(dfs[c("full_rmse_perc_estR1P2","full_rmse_value_alt_offsetR1P2")], 1, which.min)]
+dfs$max_colR2P1 = colnames(dfs[c("full_rmse_perc_estR2P1","full_rmse_value_alt_offsetR2P1")])[apply(dfs[c("full_rmse_perc_estR2P1","full_rmse_value_alt_offsetR2P1")], 1, which.min)]
+dfs$max_colR2P2 = colnames(dfs[c("full_rmse_perc_estR2P2","full_rmse_value_alt_offsetR2P2")])[apply(dfs[c("full_rmse_perc_estR2P2","full_rmse_value_alt_offsetR2P2")], 1, which.min)]
+dfs$max_colR3P1 = colnames(dfs[c("full_rmse_perc_estR3P1","full_rmse_value_alt_offsetR3P1")])[apply(dfs[c("full_rmse_perc_estR3P1","full_rmse_value_alt_offsetR3P1")], 1, which.min)]
+dfs$max_colR3P2 = colnames(dfs[c("full_rmse_perc_estR3P2","full_rmse_value_alt_offsetR3P2")])[apply(dfs[c("full_rmse_perc_estR3P2","full_rmse_value_alt_offsetR3P2")], 1, which.min)]
+
+#format
+dfs = dfs %>% 
+  tidyr::pivot_longer(
+    cols = starts_with("max_col"), 
+    names_to = "cond", 
+    values_to = "bestfit",
+    values_drop_na = TRUE
+  )
+
+#rename and make pretty
+dfs <- dfs %>%
+  mutate(bestfit = ifelse(grepl("perc", bestfit), "PERC", bestfit))
+dfs <- dfs %>%
+  mutate(bestfit = ifelse(grepl("value", bestfit), "VALUE", bestfit))
+dfs$cond = as.factor(dfs$cond)
+levels(dfs$cond) <- c("R1P1", "R1P2", "R2P1","R2P2","R3P1","R3P2")
+
+
+
+#write.csv(dfs, here::here('outputs', 'fitting', 'crossvalidationFULL', 'VALUEPERC', paste0("cv_bestfittingmodel.csv")))
+
+
+#check distribution of mechanism
+
+count_table <- dfs %>%
+  group_by(bestfit) %>%
+  summarise(count = n(), .groups = 'drop')
+count_table
+#22.74%
+```
+
+
+
+#check best fits 
+```{r}
+# Get task data
+dftotal<- read.csv(paste0(data_path, "/data/processed/df_alltasks.csv" ),header = TRUE)
+length(unique(dftotal$subject))
+
+# Subset generalisation trials 
+dfg <- dftotal[dftotal$task %in% "gen",]
+dfg$rr = dfg$ou
+dftotal$anx <- dftotal$sticsa
+dftotal$anx_z <- (dftotal$anx-mean(dftotal$anx))/sd(dftotal$anx)
+length(unique(dfg$subject))
+
+#get fitted parameters
+ndf<- read.csv(paste0(data_path, "/outputs/fitting/crossvalidation/cv_fittedparameters_valuemodel.csv" ),header = TRUE)
+
+ndf$rr[ndf$rr == 25] = "low"
+ndf$rr[ndf$rr == 50] = "mid"
+ndf$rr[ndf$rr == 75] = "high"
+ndf$pu[ndf$pu == "low"] = 0
+ndf$pu[ndf$pu == "high"] = 1
+ndf$subject = ndf$sub
+
+df <- merge(dfg, ndf, by=c("subject","rr", "pu"))
+df$omega_cat <- ifelse(df$omega >= 0.5, "gaussian", "linear")
+
+#get model fits
+dfbestcond<- dfs
+dfbestcond$condition <- dfbestcond$cond
+dfbestcond$condition <- as.character(dfbestcond$condition)
+dfbestcond$condition[grepl("R1P1", dfbestcond$condition)] <- "0" 
+dfbestcond$condition[grepl("R1P2", dfbestcond$condition)] <- "1"
+dfbestcond$condition[grepl("R2P1", dfbestcond$condition)] <- "2"
+dfbestcond$condition[grepl("R2P2", dfbestcond$condition)] <- "3"
+dfbestcond$condition[grepl("R3P1", dfbestcond$condition)] <- "4"
+dfbestcond$condition[grepl("R3P2", dfbestcond$condition)] <- "5"
+dfbestcond$subject = dfbestcond$sub
+
+dfg <- merge(df, dfbestcond, by=c("subject","condition"))
+
+
+#write.csv(dfg, paste0(data_path, "/data/processed/Crossvalidation/dfgenCVVALUE.csv" ),row.names = FALSE)
+
+```
+
+
+```{r}
+length(unique(dfg$subject))
+dfg$response = as.integer(dfg$response)
+dfg$anx = dfg$sticsa
+dfg$anx_z <- (dfg$anx-mean(dfg$anx))/sd(dfg$anx)
+#dfg$omega_cat <- ifelse(dfg$omega < 0.5, "linear", "gaussian")
+dfg$bestfit = as.factor(dfg$bestfit)
+
+
+
+# round to avoid grouping issues
+dfg <- dfg %>%
+  mutate(across(c(omega, lambda, offset, anx_z), ~ round(.x, 6)))
+
+#reduce to one entry x ppt and condition
+paramdf <- dfg %>% 
+  group_by(subject, rr, pu, anx_z, omega, lambda, offset, condition, anx, bestfit, omega_cat) %>% 
+  summarise_at("response",funs(mean,std.error),na.rm = TRUE)
+paramdf
+
+
+#check distribution of mechanism
+paramdf$sub = paramdf$subject
+count_table <- paramdf %>%
+  group_by(bestfit) %>%
+  #group_by(bestfit, omega_cat) %>%
+  summarise(count = n(), .groups = 'drop')
+count_table
+#110/840
+
+
+#check distribution of pattern (overall, not just for value) 
+count_table <- paramdf %>%
+  group_by(omega_cat) %>%
+  summarise(count = n(), .groups = 'drop')
+count_table
+#377/840 lin
+
+```
+
+```{r}
+# % best fit by Perceptual or value model 
+mechanismtab = table(paramdf$bestfit)
+mechanismtab #13.1% --> 22.5%
+
+#Split by mechanism (and pattern)
+rawtab = table(paramdf$omega_cat, paramdf$bestfit)
+percentage_table <- prop.table(rawtab, margin = 2) * 100
+percentage_table
+
+#Plot: Split by Pattern (and mechanism)
+rawtab = table(paramdf$omega_cat, paramdf$bestfit)
+percentage_table <- prop.table(rawtab, margin = 1) * 100
+percentage_table
+tab_percent <- as.data.frame(as.table(percentage_table))
+
+#Fig 4a: model fits x pattern in % 
+ggplot(tab_percent, aes(x=Var2, y = Freq, fill = Var2)) + geom_bar(stat = "identity", width = 0.5)+theme_classic()+ scale_fill_brewer(palette="Purples")+theme(aspect.ratio = 2)+theme(axis.title.y = element_text(margin = margin(r = 1)))+theme(text = element_text(size = 20))+xlab("Best fitting model")+ylab("")+theme(legend.position = "none")+scale_y_continuous(labels = scales::percent_format(scale = 1))+facet_grid(.~Var1)+theme(axis.title.y = element_text(margin = margin(t = 0, r = 15, b = 0, l = 0)))+ theme(axis.title.x = element_text(vjust=-0.4))+theme(axis.line.x.bottom=element_line(size=0.8),axis.line.y.left=element_line(size=0.8))+ scale_fill_manual( values = c("grey","black"))+ scale_color_manual( values = c("grey","black"))
+
+#ggsave(path = paste0(data_path, "/Plots/Supplement"), width = 5, height = 5, filename = 'cv_modelfits.png', device='png', dpi=700)
+```
+
+

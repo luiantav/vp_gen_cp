@@ -1,0 +1,160 @@
+---
+title: "Parameter recovery and correlation checks"
+author: "LV"
+date: "2024-01-10"
+output: html_document
+---
+
+# Get environment right
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("renv", "here", "knitr", "dplyr")
+
+here::i_am("flag_project_root.R")
+here::here()
+data_path = here::here()
+
+#renv::activate(project=here::here())
+#renv::restore(project=here::here()) #when asked to activate: NO!
+#renv::snapshot()
+
+packages <- c("ggplot2", "dplyr", "stats","lme4", "here", "renv","gtools", "see","plotrix","modelbased","emmeans", "performance", "tidyverse", "ggsignif","broom","quickpsy", "ggpubr", "performance","glmmTMB", "loo", "bayesplot","rlang","bayestestR", "rstan","brms","tidybayes","sjPlot","sjmisc","yardstick","effectsize","datawizard","esc","grid","lsr","gridExtra")
+
+# load the packages from lock 
+lapply(packages, library, character.only = TRUE)
+```
+
+
+```{r}
+here::i_am("flag_project_root.R")
+outs = here::here('outputs','param_recovery') 
+
+#get fitted parameters
+all_files <- list.files(path = outs, pattern = "\\.csv$", full.names = TRUE)
+csv_files <- all_files[grep(".csv", all_files, ignore.case = TRUE) & grepl("param_", all_files, ignore.case = TRUE)]
+data_list <- lapply(csv_files, read.csv)
+df2 <- bind_rows(data_list)
+
+#Prep
+dfmin <- df2 %>%
+  group_by(sub, model) %>%
+  slice_min(BIC, with_ties = FALSE) %>%
+  ungroup()
+```
+
+
+#checks
+```{r}
+#LAMBDA
+ggplot(dfmin, aes(x = lambdaIN, y = lambdaOUT)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size=0.8)+
+  facet_grid(.~ model) +
+  theme_bw() +
+  labs(x = "True (IN)", y = "Recovered (OUT)", title = "Parameter recovery:lambda")+coord_equal()+stat_cor(aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")), 
+           method = "pearson", label.x.npc = "left", label.y.npc = "top") 
+
+
+#OFFSET
+ggplot(dfmin, aes(x = offsetIN, y = offsetOUT)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size=0.8)+
+  facet_grid(.~ model) +
+  theme_bw() +
+  labs(x = "True (IN)", y = "Recovered (OUT)", title = "Parameter recovery: offset")+coord_equal()+stat_cor(aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")), 
+           method = "pearson", label.x.npc = "left", label.y.npc = "top") 
+
+
+#RHO
+ggplot(dfmin, aes(x = rhoIN, y = rhoOUT)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "blue", size=0.8)+
+  facet_grid(.~ model) +
+  theme_bw() +
+  labs(x = "True (IN)", y = "Recovered (OUT)", title = "Parameter recovery: rho")+coord_equal()+stat_cor(aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")), 
+           method = "pearson", label.x.npc = "left", label.y.npc = "top") 
+
+#OMEGA
+
+ggplot(dfmin, aes(x = as.factor(omegaIN), y = omegaOUT)) +
+  geom_violinhalf(side = "l", alpha = 0.6, trim = FALSE, fill = "blue") +
+  geom_boxplot(width = 0.15, outlier.size = 0.5) +
+  facet_grid(.~model, scales = "free_y") +
+  theme_bw() +
+  labs(x = "Type", y = "Omega", title = "Omega distribution by model")
+
+
+```
+
+#plot individually
+```{r}
+#VALUE
+ggplot(data=dfmin[dfmin$model == 'value_alt_offset',], aes(x=lambdaIN, y=lambdaOUT))+geom_abline(slope = 1, intercept = 0, color = "blue", size=0.8)+ geom_point()+ ylim(0,10)+xlim(0,10)+stat_cor(method = "spearman", label.x = 3, label.y = 0.8, size = 6, color = 'darkgrey')+ theme_classic() +theme(aspect.ratio = 1)+ylab(expression(paste("Inferred ", lambda, "")))+theme(aspect.ratio = 1)+xlab(expression(paste("Simulated ", lambda, "")))+theme(text = element_text(size = 20))
+
+ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'lambda_recovery.png', device='png', dpi=700) 
+
+#OFFSET
+ggplot(data=dfmin[dfmin$model == 'value_alt_offset',], aes(x=offsetIN, y=offsetOUT))+geom_abline(slope = 1, intercept = 0, color = "blue", size=0.8) + geom_point()+ ylim(-0.3,0.3)+xlim(-0.3,0.3)+theme_classic() +stat_cor(method = "spearman", label.x = 0, label.y = -0.2, size = 6, color = 'darkgrey')+stat_cor(method = "spearman", label.x = 3, label.y = 0.8, size = 6, color = 'darkgrey')+ theme_classic() +theme(aspect.ratio = 1)+ylab(expression(paste("Inferred ", alpha, "")))+theme(aspect.ratio = 1)+xlab(expression(paste("Simulated ", alpha, "")))+theme(text = element_text(size = 20))
+ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'offset_recovery.png', device='png', dpi=700) 
+
+
+#OMEGA
+ggplot(data=dfmin[dfmin$model == 'value_alt_offset',], aes(x=as.factor(omegaIN), y=omegaOUT)) +geom_boxplot(width=0.2, fill = 'blue')+ geom_point()+theme_classic()+ theme(aspect.ratio = 1) +stat_cor(method = "spearman", label.x = 0, label.y = 0.1, size = 0.5, color = 'darkgrey')+xlab(expression(paste("Simulated ", Omega, "")))+ylab(expression(paste("Inferred ", Omega, "")))+theme(text = element_text(size = 20))+geom_violinhalf(position = position_nudge(x = .2, y = 0), alpha = 0.4, fill = 'blue')
+ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'omega_recovery.png', device='png', dpi=700) 
+
+
+```
+
+
+#parameter correlations
+```{r}
+param_labels <- c(
+  "lambdaIN" = expression(lambda),
+  "offsetIN" = expression(alpha),
+  "omegaIN"  = expression(Omega),
+  "rhoIN"    = expression(rho),
+  "lambdaOUT" = expression(lambda),
+  "offsetOUT" = expression(alpha),
+  "omegaOUT"  = expression(Omega),
+  "rhoOUT"    = expression(rho)
+)
+
+
+vm <- dfmin[dfmin$model == "value_alt_offset",]
+
+in_cols <- c("offsetIN", "omegaIN", "lambdaIN")
+corr_in <- round(cor(vm[, in_cols], use = "pairwise.complete.obs"), 2)
+melted_in <- melt(corr_in)
+
+ggplot(data = melted_in, aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() +
+  geom_text(aes(label = value), size = 4, color = "white") +
+  scale_fill_gradient(low = "grey", high = "darkblue") + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(vjust = 0.5, hjust = 1),
+        aspect.ratio = 1,
+        text = element_text(size = 18))+
+  scale_x_discrete(labels = param_labels) +
+  scale_y_discrete(labels = param_labels)
+
+#ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'paramsIN.png', device='png', dpi=700) 
+
+
+out_cols <- c("offsetOUT", "omegaOUT", "lambdaOUT")
+corr_out <- round(cor(vm[, out_cols], use = "pairwise.complete.obs"), 2)
+melted_out <- melt(corr_out)
+
+ggplot(data = melted_out, aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() +
+  geom_text(aes(label = value), size = 4, color = "white") +
+  scale_fill_gradient(low = "grey", high = "darkblue") + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(vjust = 0.5, hjust = 1),
+        aspect.ratio = 1,
+        text = element_text(size = 18))+
+  scale_x_discrete(labels = param_labels) +
+  scale_y_discrete(labels = param_labels)
+
+#ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'paramsOUT.png', device='png', dpi=700) 
+```
+

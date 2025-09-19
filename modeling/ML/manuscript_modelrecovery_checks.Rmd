@@ -1,0 +1,97 @@
+---
+title: "Model recovery"
+author: "LV"
+date: "2024-01-10"
+output: html_document
+---
+
+Script takes model recovery simulation outputs and checks for model recovery, 
+Plots confusion matrix for
+
+A) Recovery: Value vs. perceptual 
+B) Reduced parametrization: Gauss Value (alpha =0) vs. perceptual 
+
+# Get environment right
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("renv", "here", "knitr", "dplyr")
+
+here::i_am("flag_project_root.R")
+here::here()
+data_path = here::here()
+
+#renv::activate(project=here::here())
+#renv::restore(project=here::here()) #when asked to activate: NO!
+#renv::snapshot()
+
+packages <- c("ggplot2", "dplyr", "stats","lme4", "here", "renv","gtools", "see","plotrix","modelbased","emmeans", "performance", "tidyverse", "ggsignif","broom","quickpsy", "ggpubr", "performance","glmmTMB", "loo", "bayesplot","rlang","bayestestR", "rstan","brms","tidybayes","sjPlot","sjmisc","yardstick","effectsize","datawizard","esc","grid","lsr","gridExtra")
+
+# load the packages from lock 
+lapply(packages, library, character.only = TRUE)
+```
+
+
+```{r}
+here::i_am("flag_project_root.R")
+outs = here::here('outputs','model_recovery') 
+
+#get fitted parameters
+all_files <- list.files(path = outs, pattern = "\\.csv$", full.names = TRUE)
+csv_files <- all_files[grep(".csv", all_files, ignore.case = TRUE) & grepl("recovery_", all_files, ignore.case = TRUE)]
+data_list <- lapply(csv_files, read.csv)
+df <- bind_rows(data_list)
+```
+
+
+```{r}
+#Prep data 
+df_sub <- df %>%
+  filter(!grepl("full", model_sim) & !grepl("full", model_fit))
+
+dfmin <- df_sub %>%
+  group_by(sub, model_sim,model_fit) %>%
+  slice_min(BIC, with_ties = FALSE) %>%
+  ungroup()
+
+dfmin$best_fit = NA
+dfmin <- dfmin %>%
+  group_by(sub, model_sim) %>%
+  mutate(best_fit = model_fit[which.min(BIC)]) %>%
+  ungroup()
+
+fdf <- dfmin %>%
+  group_by(sub, model_sim) %>%
+  slice_min(order_by = BIC, n = 1) %>%
+  ungroup()
+
+# Finalize subsets
+fdfa <- fdf %>%
+  select(model_sim, best_fit, BIC)
+
+fdf <- fdf %>%
+  select(model_sim, best_fit)
+```
+
+
+
+```{r}
+possible_levels <- unique(c(fdf$model_sim, fdf$bestfit))
+
+fdf$model_sim <- factor(fdf$model_sim, levels = possible_levels)
+fdf$best_fit   <- factor(fdf$best_fit,   levels = possible_levels)
+
+# Confusion matrix
+cm <- yardstick::conf_mat(fdf, truth = model_sim, estimate = best_fit)
+
+# Plot heatmap
+ggplot2::autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low = "#ABA8BE", high = "#F5D9C2") +
+  theme(aspect.ratio = 1) +
+  xlab("True model (fit)") +
+  ylab("Recovered model (bestfit)") +
+  theme(text = element_text(size = 20))
+```
+
+```{r}
+#ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'modelrecalpha0.png', device='png', dpi=700) 
+```

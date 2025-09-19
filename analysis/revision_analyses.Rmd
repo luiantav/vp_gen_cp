@@ -1,0 +1,454 @@
+---
+title: "vp_gen_revisions"
+author: "Luianta Verra"
+date: "2025-04-23"
+output: html_document
+---
+
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("renv", "here", "knitr", "dplyr")
+
+here::i_am("flag_project_root.R")
+here::here()
+data_path = here::here()
+
+#renv::activate(project=here::here())
+#renv::restore(project=here::here()) 
+#renv::snapshot()
+
+packages <- c("ggplot2", "dplyr", "stats","lme4", "here", "renv","gtools", "see","plotrix","modelbased","emmeans", "performance", "tidyverse", "ggsignif","broom","quickpsy", "ggpubr", "performance","glmmTMB", "loo", "bayesplot","rlang","bayestestR", "rstan","brms","tidybayes","sjPlot","sjmisc","yardstick","effectsize","datawizard","esc","grid","lsr","gridExtra","boot")
+
+# load the packages from lock 
+lapply(packages, library, character.only = TRUE)
+
+
+```
+
+# get sticsa values for included ppt. 
+```{r}
+df<- read.csv(paste0(data_path, "/data/processed/df_alltasks.csv" ),header = TRUE)
+
+dfsum<- df %>% 
+  group_by(subject) %>% 
+  summarise_at(c("sticsa"), mean)
+dfsum$included = 1
+
+```
+
+# same for ppt not included 
+```{r}
+df2<- read.csv(paste0(data_path, "/data/processed/survey_nopid.csv" ),header = TRUE)
+
+# Column names to select
+sticsa_cols <- c(
+  "PROLIFICID",
+  "STICSA.SQ001.", "STICSA.SQ002.", "STICSA.SQ003.", "STICSA.SQ004.", "STICSA.SQ005.",
+  "STICSA.SQ006.", "STICSA.SQ007.", "STICSA.SQ008.", "STICSA.SQ009.", "STICSA.SQ010.",
+  "STICSA.SQ011.", "STICSA.SQ012.", "STICSA.SQ013.", "STICSA.SQ014.", "STICSA.SQ015.",
+  "STICSA.SQ016.", "STICSA.SQ017.", "STICSA.SQ018.", "STICSA.SQ019.", "STICSA.SQ020.",
+  "STICSA.SQ021."
+)
+# Select and rename columns
+sticsa <- df2 %>%
+  select(all_of(sticsa_cols)) %>%
+  rename_with(~ paste0("STICSA", 1:21), .cols = sticsa_cols[-1]) %>%
+  mutate(across(starts_with("STICSA"), ~ case_when(
+    str_trim(.x) == "Not at All" ~ 1,
+    str_trim(.x) == "A little" ~ 2,
+    str_trim(.x) == "Moderately" ~ 3,
+    str_trim(.x) == "Very much So" ~ 4,
+    TRUE ~ NA_real_
+  )))
+
+# Get sticsa total score
+sticsa$sticsa <- rowSums(sticsa[, -which(names(sticsa) %in% c("PROLIFICID"))])
+sticsa$subject = as.character(sticsa$PROLIFICID)
+sticsa$included = 0
+
+sticsa_score <- sticsa[, c("subject", "sticsa", "included")]
+```
+
+```{r}
+dffull <- rbind(dfsum, sticsa_score)
+ggplot(dffull, aes(x = sticsa))+geom_histogram(bins = 15)+facet_grid("included")+theme(aspect.ratio = 1)
+
+#compare included and not included on sticsa scores. 
+t_test_result <- t.test(sticsa ~ included, data = dffull)
+t_test_result
+```
+
+# LEARNING checks
+```{r}
+#get lambdas from generalisation 
+vdf<- read.csv(paste0(data_path, "/outputs/fitting/todata/fittedparameters_valuemodel.csv" ),header = TRUE)
+vdf$subject = vdf$sub
+vdf$rr[vdf$rr == 1] = "low"
+vdf$rr[vdf$rr == 2] = "mid"
+vdf$rr[vdf$rr == 3] = "high"
+vdf$pu[vdf$pu == 1] = 0
+vdf$pu[vdf$pu == 2] = 1
+vdf$pu_cat = as.factor(vdf$pu)
+
+df <- read.csv(paste0(data_path, "/data/processed/df_alltasks.csv"),header = TRUE) 
+dfg = df[df$task == "gen",]
+length(unique(dfg$subject))
+dfg$response = as.integer(dfg$response)
+dfg$rr <- dfg$ou
+dfg <- merge(dfg, vdf, by=c("subject","rr", "pu"))
+
+
+#get rl model parameters 
+fdf<- read.csv(paste0(data_path, "/outputs/fitting/fittedparameters_learningmodel.csv" ),header = TRUE)
+fdf$subject = fdf$sub
+fdf$rr[fdf$rr == 25] = "low"
+fdf$rr[fdf$rr == 50] = "mid"
+fdf$rr[fdf$rr == 75] = "high"
+
+#summarize and merge
+dfg_sub <- dfg %>%
+  select(subject,lambda, bestfit, sticsa) %>%
+  group_by(subject, sticsa) %>%
+  summarise(
+    lambda = mean(lambda, na.rm = TRUE)
+  )
+
+fdf_sub <- fdf %>%
+  select(sub, alpha, v0)%>%
+  group_by(sub) %>%
+  summarise(
+    alpha = mean(alpha, na.rm = TRUE),
+    v0 = mean(v0, na.rm = TRUE)
+  )
+
+fdf_sub$subject <- fdf_sub$sub
+merged_df <- left_join(dfg_sub, fdf_sub, by = c("subject"))
+
+#how fast they learn not associated with how much they generalise
+cor.test(merged_df$lambda, merged_df$alpha, method = "pearson")
+
+
+# anx not associated with how fast they learn
+sdf <- merged_df %>%
+  group_by(subject, sticsa) %>%
+  summarise(
+    alpha = mean(alpha, na.rm = TRUE)
+  )
+
+cor.test(sdf$sticsa, sdf$alpha, method = "pearson")
+
+sdf <- merged_df %>%
+  group_by(subject) %>%
+  summarise(
+    alpha = mean(alpha, na.rm = TRUE),
+    v0 = mean(v0, na.rm = TRUE)
+  )
+
+ggplot(data=sdf, aes(x="", y=alpha))+geom_boxplot(fill = "darkblue")+theme_classic()+theme(aspect.ratio = 1)+theme(text = element_text(size = 20))+xlab("Learning rate")+ylab("")
+#ggsave(path = paste0(data_path, "/Plots/Supplement"), width = 5, height = 5, filename = 'learning_rate.png', device='png', dpi=700)
+ggplot(data=sdf, aes(x="", y=v0))+geom_boxplot(fill = "darkblue")+theme_classic()+theme(aspect.ratio = 1)+theme(text = element_text(size = 20))+xlab("Starting value")+ylab("")
+#ggsave(path = paste0(data_path, "/Plots/Supplement"), width = 5, height = 5, filename = 'v0_learning.png', device='png', dpi=700)
+```
+
+
+
+# Crossvalidation VALUE model 
+```{r}
+dfg <- read.csv(paste0(data_path, "/data/processed/Crossvalidation/dfgenCVVALUE.csv"),header = TRUE) #full
+length(unique(dfg$subject))
+dfg$response = as.integer(dfg$response)
+dfg$anx = dfg$sticsa
+dfg$anx_z <- (dfg$anx-mean(dfg$anx))/sd(dfg$anx)
+dfg$omega_cat <- ifelse(dfg$omega < 0.5, "linear", "gaussian")
+dfg$bestfit = as.factor(dfg$bestfit)
+
+
+# Crossvalidation checks 
+dfbestcond<- read.csv(here::here('outputs', 'fitting','crossvalidation', paste0("cv_bestfittingmodel.csv")))
+
+dfbestcond$RMSEDIFFpercvalueR1P1 = dfbestcond$full_rmse_perc_estR1P1 - dfbestcond$full_rmse_value_alt_offsetR1P1
+dfbestcond$RMSEDIFFpercvalueR1P2 = dfbestcond$full_rmse_perc_estR1P2 - dfbestcond$full_rmse_value_alt_offsetR1P2
+dfbestcond$RMSEDIFFpercvalueR2P1 = dfbestcond$full_rmse_perc_estR2P1 - dfbestcond$full_rmse_value_alt_offsetR2P1
+dfbestcond$RMSEDIFFpercvalueR2P2 = dfbestcond$full_rmse_perc_estR2P2 - dfbestcond$full_rmse_value_alt_offsetR2P2
+dfbestcond$RMSEDIFFpercvalueR3P1 = dfbestcond$full_rmse_perc_estR3P1 - dfbestcond$full_rmse_value_alt_offsetR3P1
+dfbestcond$RMSEDIFFpercvalueR3P2 = dfbestcond$full_rmse_perc_estR3P2 - dfbestcond$full_rmse_value_alt_offsetR3P2
+
+# Change format
+dfbestcond = dfbestcond %>% 
+  tidyr::pivot_longer(
+    cols = starts_with("RMSEDIFFpercvalue"), 
+    names_to = "condition", 
+    values_to = "DIFFpercvalue",
+    values_drop_na = TRUE
+  )
+
+dfbestcond$pu = NA
+dfbestcond$rr = NA
+dfbestcond$pu[grepl("P1", dfbestcond$condition)] <- "0" 
+dfbestcond$pu[grepl("P2", dfbestcond$condition)] <- "1"
+dfbestcond$rr[grepl("R1", dfbestcond$condition)] <- "low"
+dfbestcond$rr[grepl("R2", dfbestcond$condition)] <- "mid"
+dfbestcond$rr[grepl("R3", dfbestcond$condition)] <- "high"
+```
+
+```{r}
+#reduce to one entry x ppt and condition
+paramdf <- dfg %>% 
+  group_by(subject, rr, pu, anx_z, omega, lambda, offset, condition, anx, bestfit, omega_cat) %>% 
+  summarise_at("response",funs(mean,std.error),na.rm = TRUE)
+paramdf
+
+
+#check distribution of mechanism
+paramdf$sub = paramdf$subject
+count_table <- paramdf %>%
+  group_by(bestfit) %>%
+  #group_by(bestfit, omega_cat) %>%
+  summarise(count = n(), .groups = 'drop')
+count_table
+#110/840
+
+
+#check distribution of pattern (overall, not just for value) 
+count_table <- paramdf[paramdf$bestfit == "VALUE",] %>%
+  group_by(omega_cat) %>%
+  summarise(count = n(), .groups = 'drop')
+count_table
+#377/840
+
+#check distribution of pattern (overall, not just for value) 
+count_table <- paramdf %>%
+  group_by(omega_cat) %>%
+  summarise(count = n(), .groups = 'drop')
+count_table
+#377/840
+
+```
+
+
+# Assess model fits & Fig. 4a
+```{r}
+#reduce to one entry x ppt and condition
+paramdf <- dfg %>% 
+  group_by(subject, rr, pu, anx_z, omega, lambda, offset, condition, anx, bestfit, omega_cat) %>% 
+  summarise_at("response",funs(mean,std.error),na.rm = TRUE)
+paramdf
+
+# % best fit by Perceptual or value model 
+mechanismtab = table(paramdf$bestfit)
+mechanismtab #13.1% --> 17.62%
+
+#Split by mechanism (and pattern)
+rawtab = table(paramdf$omega_cat, paramdf$bestfit)
+percentage_table <- prop.table(rawtab, margin = 2) * 100
+percentage_table
+
+#Plot: Split by Pattern (and mechanism)
+rawtab = table(paramdf$omega_cat, paramdf$bestfit)
+percentage_table <- prop.table(rawtab, margin = 1) * 100
+percentage_table
+tab_percent <- as.data.frame(as.table(percentage_table))
+
+#Fig 4a: model fits x pattern in % 
+ggplot(tab_percent, aes(x=Var2, y = Freq, fill = Var2)) + geom_bar(stat = "identity", width = 0.5)+theme_classic()+ scale_fill_brewer(palette="Purples")+theme(aspect.ratio = 2)+theme(axis.title.y = element_text(margin = margin(r = 1)))+theme(text = element_text(size = 20))+xlab("Best fitting model")+ylab("")+theme(legend.position = "none")+scale_y_continuous(labels = scales::percent_format(scale = 1))+facet_grid(.~Var1)+ scale_fill_manual( values = c("PERC" = "orange", "VALUE" = "black"), labels = c("P", "V"))+theme(axis.title.y = element_text(margin = margin(t = 0, r = 15, b = 0, l = 0)))+ theme(axis.title.x = element_text(vjust=-0.4))+theme(axis.line.x.bottom=element_line(size=0.8),axis.line.y.left=element_line(size=0.8))
+
+#ggsave(path = paste0(data_path, "/plots"), width = 5, height = 5, filename = 'model_fits.png', device='png', dpi=700)
+```
+
+
+
+
+# Get Area under the curve as an approximation of generalisation amount
+```{r}
+# Summ by condition and distance 
+dfauc <- dfg %>%
+  arrange(subject, ou, pu, distance)
+
+# Get AUC using trapezoidal rule
+auc_results <- dfauc %>%
+  group_by(subject, ou, pu) %>%
+  summarise(AUC = sum((lead(distance) - distance) * 
+                      (response_recoded + lead(response_recoded)) / 2, na.rm = TRUE),
+  anx = first(anx),
+  omega_cat = first(omega_cat),
+  lambda = first(lambda),
+  offset = first(offset))
+
+# Get AUC x subject 
+auc_summary <- auc_results %>%
+  group_by(subject) %>%
+  summarise(
+    mean_AUC = mean(AUC, na.rm = TRUE),  # Average AUC across conditions
+    anx = first(anx),  # Retrieve unique anx value for each participant
+    omega_cat = first(omega_cat),
+    lambda = first(lambda), 
+    offset = first(offset)
+  )
+
+#Association of ANX and AUC
+cor.test(auc_results$anx, auc_results$AUC)
+
+#Association of AUC and lambda parameter 
+auc.anx <- lmer(data=auc_results, AUC ~lambda+(1|subject)) #for now ignore sing
+car::Anova(auc.anx, type = "II") 
+summary(auc.anx)
+effectsize::eta_squared(auc.anx, alternative = "two.sided")
+```
+
+
+
+```{r}
+#Reduce to one observation per condition
+pdf0 <- dfbestcond %>% 
+  group_by(sub, rr,pu) %>% 
+  summarise_at(c("DIFFpercvalue"), mean)
+
+#Add anxiety 
+pdf0$subject = pdf0$sub
+pdf2 <- dfg %>% 
+  group_by(subject, rr, pu) %>% 
+  summarise_at(c("anx"), mean)
+
+#Fit anxiety model 
+df <- merge(pdf0,pdf2, by=c("subject","rr", "pu"))
+df$anx_z <- (df$anx-mean(df$anx))/sd(df$anx)
+
+m.anxonly2 =lmer(DIFFpercvalue~anx*rr*pu+(1+rr+pu|sub), data = df)
+car::Anova(m.anxonly2, type = "II")
+summary(m.anxonly2)
+effectsize::eta_squared(m.anxonly2, alternative = "two.sided")
+
+#library(WRS2) 
+
+#cor relative model fit and TA
+cor.test(df$DIFFpercvalue, df$anx, method = "pearson")
+#pbcor(df$DIFFpercvalue, df$anx)
+
+#bootstrapped CI 
+library(boot)
+boot_corr <- boot(df, function(df, indices) cor(df[indices, "DIFFpercvalue"], df[indices, "anx"]), R = 1000)
+boot_corr
+ci_result <- boot.ci(boot_corr, type = "perc")
+ci_result
+
+
+# Fig. 5c: Association of TA and relative model fit 
+pdfX <- df %>%
+  group_by(sub, anx) %>%
+  summarise_at(c("DIFFpercvalue"), funs(mean,std.error),na.rm = TRUE)
+
+w9 <- ggplot(data=pdfX, aes(x = mean, y = anx)) +
+  geom_point() +
+  stat_smooth(method = "lm", formula = y ~ x, color = 'black', size = 0.8) +
+  ylab("Trait Anxiety") +
+  xlab("RMSE difference: P-V") +
+  theme_classic() +
+    theme(
+    axis.title.y = element_text(margin = margin(r = 15)),
+    axis.title.x = element_text(vjust = -0.4),
+    axis.line.x.bottom = element_line(size = 0.8),
+    axis.line.y.left = element_line(size = 0.8),
+    text = element_text(size = 18),
+    aspect.ratio = 1.5,
+    legend.position = "none"
+    )+
+  annotate("text", x = min(pdfX$mean), y = max(pdfX$anx) - 5, 
+           label = bquote(rho == .(0.11) * "," * CI[95*"%"] * "[" * .(0.05) * "," * .(0.17) * "]"), 
+         hjust = 0, vjust = 1, size = 4.5)  # Adjusted y position and annotation size
+w9
+
+#ggsave(path = paste0(data_path, "/plots"), width = 5, height = 5, filename = 'bicdiffsanx.png', device='png', dpi=700) 
+```
+# Lambda: offset : rr
+```{r}
+paramdf <- dfg %>% 
+  group_by(subject, rr, pu, anx_z, omega, lambda, offset, condition, anx, bestfit, omega_cat) %>% 
+  summarise_at("response",funs(mean,std.error),na.rm = TRUE)
+paramdf
+
+
+#Negative relationship of lambda and offset, that differes for rr conditions 
+m.off <- lmer(data=paramdf, lambda ~ offset*rr+(1+rr|subject))
+car::Anova(m.off, type = "II") #only fits without random effects
+summary(m.off)
+effectsize::eta_squared(m.off, alternative = "two.sided")
+
+em <- emtrends(m.off, pairwise ~ rr, var = "offset", adjust="holm", type = "response")
+em
+contr = as.data.frame(em$contrasts)
+t_to_eta2(contr$t.ratio[3], contr$df[3], ci = 0.95, alternative = "two.sided")
+t_to_eta2(contr$t.ratio[2], contr$df[2], ci = 0.95, alternative = "two.sided")
+
+```
+
+
+# Lambda and anx (and offset)
+```{r}
+
+# No association of Lambda and TA
+m.lambda.anx.only <- lmer(data=paramdf, lambda ~anx_z+(1|subject))
+car::Anova(m.lambda.anx.only, type = "II")
+summary(m.lambda.anx.only)
+
+# However interacting with offset and reinforcement rate condition
+m.lambda.anx.offset <- lmer(data=paramdf, lambda ~anx_z*offset*rr+(1+rr|subject))
+car::Anova(m.lambda.anx.offset, type = "II")
+summary(m.lambda.anx.offset)
+effectsize::eta_squared(m.lambda.anx.offset, alternative = "two.sided")
+
+em <- emtrends(m.lambda.anx.offset, pairwise ~ rr|offset, var = "anx_z", adjust="holm", type = "response")
+em
+```
+
+
+
+#CROSSVAL METHODS FITS MORE AS GAUSSIAN
+```{r}
+#dfplot <- merge(dfg, paramdf, by=c("subject", "rr", "pu"))
+
+# Summarizing the data
+pdf0 <- dfg[dfg$bestfit == "VALUE",] %>%
+  group_by(subject, gsreverted, ou, pu, omega_cat) %>%
+  summarise_at("response", funs(mean, std.error), na.rm = TRUE)
+
+# Convert subject to factor
+pdf0$subject = as.factor(pdf0$subject)
+
+# Create new labels for subject
+new_labels <- setNames(as.character(1:140), levels(pdf0$subject))
+
+# Plot
+ggplot(pdf0, aes(x = gsreverted, y = mean, group = interaction(ou, pu), color = omega_cat)) +
+  geom_line(aes(group = interaction(ou, pu)), na.rm = TRUE, alpha = 0.6, show.legend = TRUE) +
+  labs(x = "Stimulus", y = "Expectancy ratings") +
+  ylim(0, 100) +
+  facet_wrap("subject", ncol = 14, labeller = labeller(subject = new_labels)) +
+  theme_classic() + 
+  theme(aspect.ratio = 1) +
+  
+  # Custom color scale
+  scale_color_manual(
+    values = c('darkred', 'darkblue'),
+    labels = c("Gaussian", "Monotonic")  # Changing legend labels
+  ) +
+  
+  # Customizing legend title (using expression to display Greek Omega)
+  labs(color = expression(Omega~"(binarised)")) + 
+  
+  # Customize axis text sizes
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16)
+  )
+
+#ggsave(path = paste0(data_path, "/plots/Supplement"), width = 5, height = 5, filename = 'gradients.png', device='png', dpi=700)
+```
+
+
+
+
+
+
+
+

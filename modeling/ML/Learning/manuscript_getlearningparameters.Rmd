@@ -1,0 +1,107 @@
+---
+title: "Get learning parameters "
+author: "LV"
+date: "2024-01-10"
+output: html_document
+---
+
+# Get environment right
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("renv", "here", "knitr", "dplyr")
+
+here::i_am("flag_project_root.R")
+here::here()
+data_path = here::here()
+
+#renv::activate(project=here::here())
+renv::restore(project=here::here())
+#renv::snapshot()
+
+packages <- c("ggplot2", "dplyr", "stats","lme4", "here", "renv","gtools", "see","plotrix","modelbased","emmeans", "performance", "tidyverse", "ggsignif","broom","quickpsy", "ggpubr", "performance","glmmTMB", "loo", "bayesplot","rlang","bayestestR", "rstan","brms","tidybayes","sjPlot","sjmisc","yardstick","effectsize","datawizard","esc","grid","lsr","gridExtra")
+
+# load the packages from lock 
+lapply(packages, library, character.only = TRUE)
+```
+
+
+
+# Paths & get data 
+```{r}
+outs = here::here('outputs','fitting', 'learning') 
+
+# Get fitted parameters & make them into df
+all_files <- list.files(path = outs, pattern = "\\.csv$", full.names = TRUE)
+csv_files <- all_files[grep(".csv", all_files, ignore.case = TRUE) & grepl("fits_", all_files, ignore.case = TRUE)]
+data_list <- lapply(csv_files, read.csv)
+df <- do.call(rbind, data_list)
+
+source(here::here('modeling', 'ML', "helper_func.R"))
+dfs <- df
+```
+
+
+# V0
+```{r}
+full <- dfs %>%
+  select(contains(c("v0_rw_base_learn","sub")))
+
+wrang = full %>% 
+  tidyr::pivot_longer(
+    cols = starts_with(c("v0")), 
+    names_to = "v0", 
+    values_drop_na = TRUE
+  )
+
+
+wrang$rr = NA
+
+wrang$rr[grepl("R1", wrang$v0)] <- "25"
+wrang$rr[grepl("R2", wrang$v0)] <- "50"
+wrang$rr[grepl("R3", wrang$v0)] <- "75"
+
+learn_v0 = wrang
+```
+
+
+# VALUE Model parameters
+```{r}
+full <- dfs %>%
+  select(contains(c("alpha_rw_base_learn","sub")))
+
+wrang = full %>% 
+  tidyr::pivot_longer(
+    cols = starts_with(c("alpha")), 
+    names_to = "alpha", 
+    values_drop_na = TRUE
+  )
+
+wrang$rr = NA
+
+wrang$rr[grepl("R1", wrang$alpha)] <- "25"
+wrang$rr[grepl("R2", wrang$alpha)] <- "50"
+wrang$rr[grepl("R3", wrang$alpha)] <- "75"
+learn_alpha = wrang #for saving
+```
+
+
+# Join value parameters and save to csv
+```{r}
+colnames(learn_v0)[colnames(learn_v0) == "v0"] <- "V0"
+colnames(learn_v0)[colnames(learn_v0) == "value"] <- "v0"
+colnames(learn_alpha)[colnames(learn_alpha) == "alpha"] <- "ALPHA"
+colnames(learn_alpha)[colnames(learn_alpha) == "value"] <- "alpha"
+
+mdf <- merge(learn_v0, learn_alpha, by = c("sub","rr"), all = TRUE) # Change 'all = TRUE' to do a full outer join, or 'all.x = TRUE' for a left outer join
+
+mdf$model = 'rw_base'
+ndf <- mdf[, c("sub", "rr", "v0", "alpha","model")] # Specify the column names you want to keep
+
+
+#write.csv(ndf, here::here('outputs', 'fitting', paste0("fittedparameters_learningmodel.csv")))
+```
+
+
+
+
+
