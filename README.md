@@ -1,5 +1,8 @@
 ### README
 
+[![DOI](https://zenodo.org/badge/doi/10.5281/zenodo.17734147.svg)](https://doi.org/10.5281/zenodo.17734147)
+
+
 **Description**
 This repo is associated with the preprint:  "Increased generalisation in trait anxiety is driven by value transfer, not reduced perceptual discrimination"
 It contains data and scripts to reproduce the results in the main text & Supplementary Material. 
